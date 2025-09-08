@@ -2,7 +2,9 @@ from vispy import gloo
 from vispy import app
 import numpy as np
 GRAVITY = 9.81
-DELTATIME = 0.01
+DELTATIME = 0.007
+BOUNDSIZE = 22.0
+PARTICLESIZE = 10
 
 VERT_SHADER = """
 attribute vec2  a_position;
@@ -60,14 +62,20 @@ class Canvas(app.Canvas):
 
     def __init__(self):
         app.Canvas.__init__(self, keys='interactive')
-        ps = self.pixel_scale
+        self.ps = self.pixel_scale
+        self.particle_size = PARTICLESIZE * self.ps
+        self.bound_size = BOUNDSIZE * self.ps
 
         # Create vertices
-        n = 1
-        self.v_position = np.array([[0.0, 0.0]], dtype=np.float32)  
-        self.v_velocity = np.array([[0.0, 0.0]], dtype=np.float32)
-        v_color = np.array([[0.0, 0.0, 1.0]], dtype=np.float32)  
-        v_size = np.array([[50 * ps]], dtype=np.float32) 
+        n = 50
+        self.v_position = np.zeros((n, 2), dtype=np.float32) 
+        self.v_velocity = np.zeros((n, 2), dtype=np.float32)
+        v_color = np.zeros((n, 3), dtype=np.float32)
+        v_size = np.full((n, 1), self.particle_size, dtype=np.float32) 
+        for i in range(n):
+            self.v_position[i] = [np.random.uniform(-self.bound_size / 2, self.bound_size / 2),
+                                  np.random.uniform(-self.bound_size / 2, self.bound_size / 2)]
+            v_color[i] = [0, 0, 1]
 
         self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
         # Set uniform and attribute
@@ -84,6 +92,25 @@ class Canvas(app.Canvas):
     def on_resize(self, event):
         gloo.set_viewport(0, 0, *event.physical_size)
 
+
+
+    def resolve_collisions(self):
+        half_bound = (self.bound_size / 2.0 )- self.particle_size
+        for i in range(1, len(self.v_position)):
+            if self.v_position[i, 1] > half_bound: 
+                self.v_position[i, 1] = half_bound
+                self.v_velocity[i, 1] *= -1  
+            elif self.v_position[i, 1] < -half_bound:  
+                self.v_position[i, 1] = -half_bound
+                self.v_velocity[i, 1] *= -1  
+
+            if self.v_position[i, 0] > half_bound:
+                self.v_position[i, 0] = half_bound
+                self.v_velocity[i, 0] *= -1
+            elif self.v_position[i, 0] < -half_bound:
+                self.v_position[i, 0] = -half_bound
+                self.v_velocity[i, 0] *= -1
+           
     def on_draw(self, event):
         gloo.clear(color=True, depth=True)
         self.program['a_position'].set_data(self.v_position)  # Update position
@@ -93,6 +120,7 @@ class Canvas(app.Canvas):
     def on_timer(self, event):
         self.v_velocity[:, 1] -= GRAVITY * DELTATIME
         self.v_position += self.v_velocity * DELTATIME 
+        self.resolve_collisions()
         self.update()
 
 
