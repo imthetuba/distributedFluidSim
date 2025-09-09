@@ -1,10 +1,17 @@
 from vispy import gloo
 from vispy import app
+from vispy.scene import SceneCanvas
 import numpy as np
 GRAVITY = 9.81
-DELTATIME = 0.007
-BOUNDSIZE = 22.0
-PARTICLESIZE = 10
+DELTATIME = 0.01
+BOUNDSIZE = 1.5
+PARTICLESIZE = 5
+RADIUSOFINFLUENCE = 2
+RESTDENSITY = 1.2
+STIFFNESS = 20.0
+MASS = 0.04
+DAMPING = 0.98
+RESTITUTION = 0.8
 
 VERT_SHADER = """
 attribute vec2  a_position;
@@ -67,21 +74,46 @@ class Canvas(app.Canvas):
         self.bound_size = BOUNDSIZE * self.ps
 
         # Create vertices
-        n = 50
+        n = 10
         self.v_position = np.zeros((n, 2), dtype=np.float32) 
         self.v_velocity = np.zeros((n, 2), dtype=np.float32)
         v_color = np.zeros((n, 3), dtype=np.float32)
-        v_size = np.full((n, 1), self.particle_size, dtype=np.float32) 
-        for i in range(n):
-            self.v_position[i] = [np.random.uniform(-self.bound_size / 2, self.bound_size / 2),
-                                  np.random.uniform(-self.bound_size / 2, self.bound_size / 2)]
-            v_color[i] = [0, 0, 1]
+        v_size = np.full((n, 1), self.particle_size, dtype=np.float32)
+        grid_size = int(np.sqrt(n))  
+        spacing = self.bound_size / (grid_size + 1)
+        index = 0
+        for i in range(grid_size):
+            for j in range(grid_size):
+                if index <= n: 
+                    self.v_position[index] = [
+                        -self.bound_size / 2 + i * spacing + spacing / 2,
+                        -self.bound_size / 2 + j * spacing + spacing / 2,
+                    ]
+                    index += 1
+        print("Particle positions:", self.v_position)
 
         self.program = gloo.Program(VERT_SHADER, FRAG_SHADER)
         # Set uniform and attribute
         self.program['a_color'] = gloo.VertexBuffer(v_color)
         self.program['a_position'] = gloo.VertexBuffer(self.v_position)
         self.program['a_size'] = gloo.VertexBuffer(v_size)
+
+        half_bound = self.bound_size / 2.0
+        boundary_vertices = np.array([
+            [-half_bound, -half_bound],
+            [half_bound, -half_bound],
+            [half_bound, half_bound],
+            [-half_bound, half_bound],
+            [-half_bound, -half_bound]  # Close the loop
+        ], dtype=np.float32)
+
+        self.boundary_program = gloo.Program(
+            "attribute vec2 a_position; void main() { gl_Position = vec4(a_position, 0.0, 1.0); }",
+            "void main() { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); }"
+        )
+        self.boundary_program['a_position'] = gloo.VertexBuffer(boundary_vertices)
+
+
         gloo.set_state(clear_color='white', blend=True,
                        blend_func=('src_alpha', 'one_minus_src_alpha'))
         # Start a timer to update the canvas
@@ -95,32 +127,90 @@ class Canvas(app.Canvas):
 
 
     def resolve_collisions(self):
-        half_bound = (self.bound_size / 2.0 )- self.particle_size
+        half_bound = (self.bound_size / 2.0 )
         for i in range(1, len(self.v_position)):
             if self.v_position[i, 1] > half_bound: 
                 self.v_position[i, 1] = half_bound
-                self.v_velocity[i, 1] *= -1  
+                self.v_velocity[i, 1] *= -RESTITUTION  
             elif self.v_position[i, 1] < -half_bound:  
                 self.v_position[i, 1] = -half_bound
-                self.v_velocity[i, 1] *= -1  
+                self.v_velocity[i, 1] *= -RESTITUTION 
 
             if self.v_position[i, 0] > half_bound:
                 self.v_position[i, 0] = half_bound
-                self.v_velocity[i, 0] *= -1
+                self.v_velocity[i, 0] *= -RESTITUTION
             elif self.v_position[i, 0] < -half_bound:
                 self.v_position[i, 0] = -half_bound
-                self.v_velocity[i, 0] *= -1
+                self.v_velocity[i, 0] *= -RESTITUTION
            
+
+    def smoothing_kernel(self, r, h):
+        if r >= 0 and r <= h:
+            return (315 / (64 * np.pi * h**9)) * (h**2 - r**2)**3
+        else:
+            return 0
+    def smoothing_kernel_gradient(self, r, h):
+        if r > 0 and r <= h:
+            return (-945 / (32 * np.pi * h**9)) * (h**2 - r**2)**2 * r
+        else:
+            return 0
+
+    def calculate_density(self, index):
+        h = RADIUSOFINFLUENCE * self.ps  
+        density = 0
+        for particle in range(len(self.v_position)):
+            if particle != index:  
+                direction = self.v_position[index] - self.v_position[particle]
+                distance = np.linalg.norm(direction)
+                if distance <= h:  
+                    density += 1 
+        area = np.pi * h**2
+        density /= area
+        return density
+    
+    def calculate_shared_pressure(self, density_i, density_j):
+        pressure_i = STIFFNESS * (density_i - RESTDENSITY)
+        pressure_j = STIFFNESS * (density_j - RESTDENSITY)
+        shared_pressure = (pressure_i + pressure_j) / 2.0
+        return shared_pressure
+
+    def calculate_pressure_force(self, index):  
+        pressureforce = np.zeros(2, dtype=np.float32)
+        for particle in range(len(self.v_position)):
+            if particle != index:
+                direction = self.v_position[index] - self.v_position[particle]
+                distance = np.linalg.norm(direction)
+                if distance <= self.particle_size:
+                    slope = self.smoothing_kernel_gradient(distance, self.particle_size)
+                    density = self.calculate_density(particle)
+                    density_of_index = self.calculate_density(index)
+                    if density > 0:
+                        shared_pressure = self.calculate_shared_pressure(density_of_index, density)
+                        pressureforce += direction * slope * shared_pressure * MASS / density
+        return pressureforce
+    
+
     def on_draw(self, event):
         gloo.clear(color=True, depth=True)
         self.program['a_position'].set_data(self.v_position)  # Update position
         self.program.draw('points')
+        self.boundary_program.draw('line_strip')
 
 
     def on_timer(self, event):
-        self.v_velocity[:, 1] -= GRAVITY * DELTATIME
-        self.v_position += self.v_velocity * DELTATIME 
+        self.v_velocity[:, 1] -= GRAVITY * DELTATIME *MASS
+
+        for i in range(len(self.v_position)):
+            pressure_force = self.calculate_pressure_force(i)
+            self.v_velocity[i] += pressure_force * DELTATIME / MASS  
+
+        self.v_velocity *= DAMPING
+
+        self.v_position += self.v_velocity * DELTATIME
+
+
         self.resolve_collisions()
+
         self.update()
 
 
