@@ -2,16 +2,17 @@ from vispy import gloo
 from vispy import app
 from vispy.scene import SceneCanvas
 import numpy as np
+import random
 GRAVITY = 9.81
-DELTATIME = 0.01
+DELTATIME = 0.0016
 BOUNDSIZE = 1.5
-PARTICLESIZE = 5
-RADIUSOFINFLUENCE = 2
-RESTDENSITY = 1.2
-STIFFNESS = 20.0
-MASS = 0.04
-DAMPING = 0.98
-RESTITUTION = 0.8
+PARTICLESIZE = 0.1
+RADIUSOFINFLUENCE = 1.5
+RESTDENSITY = 8
+STIFFNESS = 1
+MASS = 1.0
+DAMPING = 0.8
+RESTITUTION = 0.5
 
 VERT_SHADER = """
 attribute vec2  a_position;
@@ -25,7 +26,7 @@ varying float v_linewidth;
 varying float v_antialias;
 
 void main (void) {
-    v_radius = a_size;
+    v_radius = a_size * 100.0;
     v_linewidth = 1.0;
     v_antialias = 1.0;
     v_fg_color  = vec4(0.0,0.0,0.0,0.5);
@@ -74,13 +75,13 @@ class Canvas(app.Canvas):
         self.bound_size = BOUNDSIZE * self.ps
 
         # Create vertices
-        n = 10
+        n = 30
         self.v_position = np.zeros((n, 2), dtype=np.float32) 
         self.v_velocity = np.zeros((n, 2), dtype=np.float32)
         v_color = np.zeros((n, 3), dtype=np.float32)
         v_size = np.full((n, 1), self.particle_size, dtype=np.float32)
         grid_size = int(np.sqrt(n))  
-        spacing = self.bound_size / (grid_size + 1)
+        spacing = self.bound_size / (grid_size + 2)
         index = 0
         for i in range(grid_size):
             for j in range(grid_size):
@@ -129,31 +130,35 @@ class Canvas(app.Canvas):
     def resolve_collisions(self):
         half_bound = (self.bound_size / 2.0 )
         for i in range(1, len(self.v_position)):
-            if self.v_position[i, 1] > half_bound: 
-                self.v_position[i, 1] = half_bound
+            if self.v_position[i, 1] >= half_bound: 
+                # if above upper boundary
+                self.v_position[i, 1] = half_bound - self.particle_size / 2
                 self.v_velocity[i, 1] *= -RESTITUTION  
-            elif self.v_position[i, 1] < -half_bound:  
-                self.v_position[i, 1] = -half_bound
+            elif self.v_position[i, 1] <= -half_bound:  
+                # if below lower boundary
+                self.v_position[i, 1] = -half_bound+ self.particle_size/ 2
                 self.v_velocity[i, 1] *= -RESTITUTION 
 
-            if self.v_position[i, 0] > half_bound:
-                self.v_position[i, 0] = half_bound
+            if self.v_position[i, 0] >= half_bound:
+                # if beyond right boundary
+                self.v_position[i, 0] = half_bound - self.particle_size / 2
                 self.v_velocity[i, 0] *= -RESTITUTION
-            elif self.v_position[i, 0] < -half_bound:
-                self.v_position[i, 0] = -half_bound
+            elif self.v_position[i, 0] <= -half_bound:
+                # if beyond left boundary
+                self.v_position[i, 0] = -half_bound+self.particle_size / 2
                 self.v_velocity[i, 0] *= -RESTITUTION
            
 
     def smoothing_kernel(self, r, h):
         if r >= 0 and r <= h:
-            return (315 / (64 * np.pi * h**9)) * (h**2 - r**2)**3
+            return  15 / (np.pi * h**6 ) * (h - r)**3
         else:
             return 0
     def smoothing_kernel_gradient(self, r, h):
         if r > 0 and r <= h:
-            return (-945 / (32 * np.pi * h**9)) * (h**2 - r**2)**2 * r
+            return  -45 / (np.pi * h**6) * (h - r)**2  / r
         else:
-            return 0
+            return np.array([0.0, 0.0])
 
     def calculate_density(self, index):
         h = RADIUSOFINFLUENCE * self.ps  
@@ -163,9 +168,8 @@ class Canvas(app.Canvas):
                 direction = self.v_position[index] - self.v_position[particle]
                 distance = np.linalg.norm(direction)
                 if distance <= h:  
-                    density += 1 
-        area = np.pi * h**2
-        density /= area
+                    # Use the smoothing kernel for density calculation
+                    density += MASS * self.smoothing_kernel(distance, h)
         return density
     
     def calculate_shared_pressure(self, density_i, density_j):
@@ -180,13 +184,15 @@ class Canvas(app.Canvas):
             if particle != index:
                 direction = self.v_position[index] - self.v_position[particle]
                 distance = np.linalg.norm(direction)
-                if distance <= self.particle_size:
+                if distance <= RADIUSOFINFLUENCE * self.ps:
                     slope = self.smoothing_kernel_gradient(distance, self.particle_size)
                     density = self.calculate_density(particle)
                     density_of_index = self.calculate_density(index)
                     if density > 0:
                         shared_pressure = self.calculate_shared_pressure(density_of_index, density)
-                        pressureforce += direction * slope * shared_pressure * MASS / density
+                        random_perturbation = np.array([random.uniform(-0.001, 0.001), random.uniform(-0.001, 0.001)])
+                        pressureforce += random_perturbation + direction * slope * shared_pressure * MASS / density
+                    
         return pressureforce
     
 
