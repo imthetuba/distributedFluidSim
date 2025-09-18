@@ -1,6 +1,8 @@
 from vispy import gloo
 from vispy import app
 from vispy.scene import SceneCanvas
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import random
 from math import pi
@@ -15,6 +17,7 @@ MASS = 1.0
 DAMPING = 0.95
 RESTITUTION = 0.95
 MAX_PRESSURE = 10.0
+NUM_PARTICLES = 400
 
 PUSH_RADIUS = 0.5
 PUSH_STRENGTH = 50.0
@@ -80,7 +83,7 @@ class Canvas(app.Canvas):
         self.bound_size = BOUNDSIZE * self.ps
 
         # Create vertices
-        n = 150
+        n = NUM_PARTICLES
         self.v_position = np.zeros((n, 2), dtype=np.float32) 
         self.v_velocity = np.zeros((n, 2), dtype=np.float32)
         self.spatial_lookup = [None] * n
@@ -131,26 +134,25 @@ class Canvas(app.Canvas):
 
 
 
-    def resolve_collisions(self):
+    def resolve_collisions(self,i):
         half_bound = (self.bound_size / 2.0 )
-        for i in range(1, len(self.v_position)):
-            if self.v_position[i, 1] >= half_bound - self.particle_size / 2: 
-                # if above upper boundary
-                self.v_position[i, 1] = half_bound - self.particle_size / 2
-                self.v_velocity[i, 1] *= -RESTITUTION  
-            elif self.v_position[i, 1] <= -half_bound + self.particle_size / 2:     
-                # if below lower boundary
-                self.v_position[i, 1] = -half_bound + self.particle_size/ 2
-                self.v_velocity[i, 1] *= -RESTITUTION 
+        if self.v_position[i, 1] >= half_bound - self.particle_size / 2: 
+            # if above upper boundary
+            self.v_position[i, 1] = half_bound - self.particle_size / 2
+            self.v_velocity[i, 1] *= -RESTITUTION  
+        elif self.v_position[i, 1] <= -half_bound + self.particle_size / 2:     
+            # if below lower boundary
+            self.v_position[i, 1] = -half_bound + self.particle_size/ 2
+            self.v_velocity[i, 1] *= -RESTITUTION 
 
-            if self.v_position[i, 0] >= half_bound - self.particle_size / 2:
-                # if beyond right boundary
-                self.v_position[i, 0] = half_bound - self.particle_size / 2
-                self.v_velocity[i, 0] *= -RESTITUTION
-            elif self.v_position[i, 0] <= -half_bound + self.particle_size / 2:
-                # if beyond left boundary
-                self.v_position[i, 0] = -half_bound + self.particle_size / 2
-                self.v_velocity[i, 0] *= -RESTITUTION
+        if self.v_position[i, 0] >= half_bound - self.particle_size / 2:
+            # if beyond right boundary
+            self.v_position[i, 0] = half_bound - self.particle_size / 2
+            self.v_velocity[i, 0] *= -RESTITUTION
+        elif self.v_position[i, 0] <= -half_bound + self.particle_size / 2:
+            # if beyond left boundary
+            self.v_position[i, 0] = -half_bound + self.particle_size / 2
+            self.v_velocity[i, 0] *= -RESTITUTION
            
 
     def smoothing_kernel(self, r, h):
@@ -268,7 +270,23 @@ class Canvas(app.Canvas):
 
         self.program['a_color'].set_data(v_color) 
 
-
+    def find_neighbors(self,i):
+        # hash the cell the particle is in
+        cellx, celly = self.position_to_cell_coord(self.v_position[i], self.particle_size)
+        cell_hash = self.hash_cell(cellx, celly)
+        neighbors = []
+        # look for the neighbors by using the hash code of the cell and the adjacent cells
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                neighbor_cell_hash = self.hash_cell(cellx + dx, celly + dy)
+                if neighbor_cell_hash in self.start_indices:
+                    start_index = self.start_indices[neighbor_cell_hash]
+                    while start_index < len(self.spatial_lookup) and self.spatial_lookup[start_index][0] == neighbor_cell_hash:
+                        neighbor_index = self.spatial_lookup[start_index][1]
+                        if neighbor_index != i:
+                            neighbors.append(neighbor_index)
+                        start_index += 1
+        return i, neighbors
 
     def on_mouse_press(self, event):
         x, y = event.pos
@@ -290,30 +308,23 @@ class Canvas(app.Canvas):
         self.update_spatial_lookup(self.v_position, self.particle_size)
         self.v_velocity[:, 1] -= GRAVITY * DELTATIME *MASS
 
-        for i in range(len(self.v_position)):
-            # hash the cell the particle is in
-            cellx, celly = self.position_to_cell_coord(self.v_position[i], self.particle_size)
-            cell_hash = self.hash_cell(cellx, celly)
-            neighbors = []
-            # look for the neighbors by using the hash code of the cell and the adjacent cells
-            for dx in [-1, 0, 1]:
-                for dy in [-1, 0, 1]:
-                    neighbor_cell_hash = self.hash_cell(cellx + dx, celly + dy)
-                    if neighbor_cell_hash in self.start_indices:
-                        start_index = self.start_indices[neighbor_cell_hash]
-                        while start_index < len(self.spatial_lookup) and self.spatial_lookup[start_index][0] == neighbor_cell_hash:
-                            neighbor_index = self.spatial_lookup[start_index][1]
-                            if neighbor_index != i:
-                                neighbors.append(neighbor_index)
-                            start_index += 1
+        #PARALELL so we can distribute the work
+        with ThreadPoolExecutor() as executor:
+            results = list(executor.map(self.find_neighbors, range(len(self.v_position))))
 
+        # Process the results
+        for i, neighbors in results:
             pressure_force = self.calculate_pressure_force(i, neighbors)
             self.v_velocity[i] += pressure_force * DELTATIME / MASS
 
         self.v_velocity *= DAMPING
         self.v_position += self.v_velocity * DELTATIME
-        self.resolve_collisions()
+        
+        #PARALELL so we can distribute the work
+        with ThreadPoolExecutor() as executor:
+            list(executor.map(self.resolve_collisions, range(len(self.v_position))))
 
+        
         self.update_colors()
 
 
