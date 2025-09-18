@@ -4,17 +4,20 @@ from vispy.scene import SceneCanvas
 import numpy as np
 import random
 from math import pi
-GRAVITY = 9.81
-DELTATIME = 0.0032
+GRAVITY = 900.81
+DELTATIME = 0.0002
 BOUNDSIZE = 1.5
-PARTICLESIZE = 0.1
+PARTICLESIZE = 0.05
 RADIUSOFINFLUENCE = 1.5
-RESTDENSITY = 8
+RESTDENSITY = 12
 STIFFNESS = 0.8
 MASS = 1.0
-DAMPING = 0.9
-RESTITUTION = 0.5
+DAMPING = 0.95
+RESTITUTION = 0.95
 MAX_PRESSURE = 10.0
+
+PUSH_RADIUS = 0.5
+PUSH_STRENGTH = 50.0
 
 VERT_SHADER = """
 attribute vec2  a_position;
@@ -77,7 +80,7 @@ class Canvas(app.Canvas):
         self.bound_size = BOUNDSIZE * self.ps
 
         # Create vertices
-        n = 70
+        n = 150
         self.v_position = np.zeros((n, 2), dtype=np.float32) 
         self.v_velocity = np.zeros((n, 2), dtype=np.float32)
         self.spatial_lookup = [None] * n
@@ -265,6 +268,23 @@ class Canvas(app.Canvas):
 
         self.program['a_color'].set_data(v_color) 
 
+
+
+    def on_mouse_press(self, event):
+        x, y = event.pos
+        canvas_width, canvas_height = self.size
+        world_x = (x / canvas_width - 0.5) * self.bound_size
+        world_y = (0.5 - y / canvas_height) * self.bound_size
+
+        click_position = np.array([world_x, world_y], dtype=np.float32)
+
+
+        for i in range(len(self.v_position)):
+            direction = self.v_position[i] - click_position
+            distance = np.linalg.norm(direction)
+            if distance < PUSH_RADIUS and distance > 0: 
+                force = (direction / distance) * PUSH_STRENGTH * (1 - distance / PUSH_RADIUS)
+                self.v_velocity[i] += force
 
     def on_timer(self, event):
         self.update_spatial_lookup(self.v_position, self.particle_size)
