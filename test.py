@@ -17,7 +17,8 @@ MASS = 1.0
 DAMPING = 0.95
 RESTITUTION = 0.95
 MAX_PRESSURE = 10.0
-NUM_PARTICLES = 400
+VISCOSITY_COEFFICIENT = 0.1
+NUM_PARTICLES = 200
 
 PUSH_RADIUS = 0.5
 PUSH_STRENGTH = 50.0
@@ -167,6 +168,13 @@ class Canvas(app.Canvas):
         factor = -945 / (32 * pi * h**9)
         return factor * (h**2 - r**2)**2 * r
 
+    def viscosity_kernel(self, r, h):
+        if r > h:
+            return 0.0
+        factor = 15 / (2 * pi * h**3)
+        return factor * (-r**3 / (2 * h**3) + r**2 / h**2 + h / (2 * r) - 1)
+
+
     def calculate_density(self, index):
         h = RADIUSOFINFLUENCE * self.ps  
         density = 0
@@ -209,8 +217,20 @@ class Canvas(app.Canvas):
                         shared_pressure = self.calculate_shared_pressure(density_of_index, density)
                         pressureforce +=  direction * slope * shared_pressure * MASS / density
         return pressureforce
-    
 
+
+    def calculate_viscosity_force(self, index, neighbors):
+        min_distance = PARTICLESIZE * self.ps * 0.5
+        viscosity_force = np.zeros(2, dtype=np.float32)
+        for neighbor in neighbors:
+            if neighbor != index:
+                distance = np.linalg.norm(self.v_position[index] - self.v_position[neighbor])
+                
+                if distance <= RADIUSOFINFLUENCE * self.ps and distance > min_distance:
+                    influence = self.viscosity_kernel(distance, RADIUSOFINFLUENCE * self.ps)
+                    viscosity_force = (self.v_velocity[neighbor] - self.v_velocity[index]) * influence
+        
+        return viscosity_force * VISCOSITY_COEFFICIENT
 
     def position_to_cell_coord(self,position,radius):
         cellx = int(position[0] / radius)
@@ -315,6 +335,8 @@ class Canvas(app.Canvas):
         # Process the results
         for i, neighbors in results:
             pressure_force = self.calculate_pressure_force(i, neighbors)
+            viscosity_force = self.calculate_viscosity_force(i, neighbors)
+            pressure_force += viscosity_force
             self.v_velocity[i] += pressure_force * DELTATIME / MASS
 
         self.v_velocity *= DAMPING
