@@ -5,15 +5,16 @@ import numpy as np
 import random
 from math import pi
 GRAVITY = 9.81
-DELTATIME = 0.0016
+DELTATIME = 0.0032
 BOUNDSIZE = 1.5
 PARTICLESIZE = 0.1
 RADIUSOFINFLUENCE = 1.5
 RESTDENSITY = 8
-STIFFNESS = 1
+STIFFNESS = 0.8
 MASS = 1.0
-DAMPING = 0.95
+DAMPING = 0.9
 RESTITUTION = 0.5
+MAX_PRESSURE = 10.0
 
 VERT_SHADER = """
 attribute vec2  a_position;
@@ -150,15 +151,16 @@ class Canvas(app.Canvas):
            
 
     def smoothing_kernel(self, r, h):
-        if r >= 0 and r <= h:
-            return  15 / (np.pi * h**6 ) * (h - r)**3
-        else:
-            return 0
+        if r > h:
+            return 0.0
+        factor = 315 / (64 * pi * h**9)
+        return factor * (h**2 - r**2)**3
+
     def smoothing_kernel_gradient(self, r, h):
-        if r > 0 and r <= h:
-            return  -45 / (np.pi * h**6) * (h - r)**2  / r
-        else:
-            return np.array([0.0, 0.0])
+        if r > h or r == 0:
+            return 0.0
+        factor = -945 / (32 * pi * h**9)
+        return factor * (h**2 - r**2)**2 * r
 
     def calculate_density(self, index):
         h = RADIUSOFINFLUENCE * self.ps  
@@ -185,15 +187,16 @@ class Canvas(app.Canvas):
         pressure_i = STIFFNESS * (density_i - RESTDENSITY)
         pressure_j = STIFFNESS * (density_j - RESTDENSITY)
         shared_pressure = (pressure_i + pressure_j) / 2.0
-        return shared_pressure
+        return np.clip(shared_pressure,-MAX_PRESSURE,MAX_PRESSURE)
 
     def calculate_pressure_force(self, index, neighbors):
         pressureforce = np.zeros(2, dtype=np.float32)
+        min_distance = PARTICLESIZE * self.ps * 0.5
         for neighbor_index in neighbors:
             if neighbor_index != index:
                 direction = self.v_position[index] - self.v_position[neighbor_index]
                 distance = np.linalg.norm(direction)
-                if distance <= RADIUSOFINFLUENCE * self.ps:
+                if distance <= RADIUSOFINFLUENCE * self.ps and distance > min_distance:
                     slope = self.smoothing_kernel_gradient(distance, self.particle_size)
                     density = self.calculate_density(neighbor_index)
                     density_of_index = self.calculate_density(index)
@@ -251,16 +254,28 @@ class Canvas(app.Canvas):
         self.program.draw('points')
         self.boundary_program.draw('line_strip')
 
+    def update_colors(self):
+        speed = np.linalg.norm(self.v_velocity, axis=1)
+        max_speed = np.max(speed) if np.max(speed) > 0 else 1
+        normalized_speed = speed / max_speed
+        
+        v_color = np.zeros((len(self.v_position), 3), dtype=np.float32)
+        v_color[:, 0] = normalized_speed  #(faster = more red)
+        v_color[:, 2] = 1 - normalized_speed  #(slower = more blue)
+
+        self.program['a_color'].set_data(v_color) 
+
 
     def on_timer(self, event):
         self.update_spatial_lookup(self.v_position, self.particle_size)
         self.v_velocity[:, 1] -= GRAVITY * DELTATIME *MASS
 
         for i in range(len(self.v_position)):
+            # hash the cell the particle is in
             cellx, celly = self.position_to_cell_coord(self.v_position[i], self.particle_size)
             cell_hash = self.hash_cell(cellx, celly)
             neighbors = []
-            # look for the neighbors
+            # look for the neighbors by using the hash code of the cell and the adjacent cells
             for dx in [-1, 0, 1]:
                 for dy in [-1, 0, 1]:
                     neighbor_cell_hash = self.hash_cell(cellx + dx, celly + dy)
@@ -278,6 +293,10 @@ class Canvas(app.Canvas):
         self.v_velocity *= DAMPING
         self.v_position += self.v_velocity * DELTATIME
         self.resolve_collisions()
+
+        self.update_colors()
+
+
         self.update()
 
 
