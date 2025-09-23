@@ -1,9 +1,9 @@
 from pyspark.sql import SparkSession, Row
-from pyspark import SparkContext, SparkConf
+
+
 
 #test
-
-#$ ./bin/pyspark --master "local[4]" --py-files test.py 
+# spark-submit --master local[3] sparktest.py
 
 """
 two types of operations:
@@ -20,18 +20,13 @@ Persist (cache) - keep elements on cluster for faster access
 
 """
 
-conf = SparkConf().setAppName("Test 1").setMaster(master)
-sc = SparkContext(conf=conf)
-spark = SparkSession.builder.getOrCreate()
+spark = SparkSession.builder.appName("Spark example").getOrCreate()
 
+data = [("John", 150,'990811'),("Erik", 200,'981012'), ("Karl", 500, '000312') ]
+df = spark.createDataFrame(data, ["Name", "Salary", "DOB"])
 
-df = spark.createDataFrame([
-    Row(Name="John", Salary=150, DOB='990811'),
-    Row(Name="Erik", Salary=200, DOB='981012'),
-    Row(Name="Karl", Salary=500, DOB='000312')
-])
+df.show()
 
-data = [1, 2, 3, 4, 5]
-distData = sc.parallelize(data)
+spark.stop()
 
 
