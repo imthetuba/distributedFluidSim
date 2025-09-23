@@ -2,7 +2,7 @@ from pyspark.sql import SparkSession, Row
 from pyspark import SparkContext, SparkConf
 
 #$ ./bin/pyspark --master "local[4]" --py-files test.py
-
+kmvkdk
 """
 two types of operations:
 transformations
