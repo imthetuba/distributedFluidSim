@@ -1,8 +1,10 @@
 from pyspark.sql import SparkSession, Row
 from pyspark import SparkContext, SparkConf
 
-#$ ./bin/pyspark --master "local[4]" --py-files test.py
-kmvkdk
+#test
+
+#$ ./bin/pyspark --master "local[4]" --py-files test.py 
+
 """
 two types of operations:
 transformations
