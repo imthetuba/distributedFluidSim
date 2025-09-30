@@ -2,11 +2,11 @@ from vispy import gloo
 from vispy import app
 from vispy.scene import SceneCanvas
 from concurrent.futures import ThreadPoolExecutor
-from pyspark.sql import SparkSession
+
 import numpy as np
 import random
 from math import pi
-GRAVITY = 9.81
+GRAVITY = 900.81
 DELTATIME = 0.0002
 BOUNDSIZE = 1.5
 PARTICLESIZE = 0.05
@@ -14,16 +14,14 @@ RADIUSOFINFLUENCE = 1.5
 RESTDENSITY = 12
 STIFFNESS = 0.8
 MASS = 1.0
-DAMPING = 0.96
+DAMPING = 0.95
 RESTITUTION = 0.95
 MAX_PRESSURE = 10.0
 VISCOSITY_COEFFICIENT = 0.1
-NUM_PARTICLES = 100
+NUM_PARTICLES = 200
+
 PUSH_RADIUS = 0.5
 PUSH_STRENGTH = 50.0
-
-
-spark = SparkSession.builder.appName("ParticleSimulation").getOrCreate()
 
 VERT_SHADER = """
 attribute vec2  a_position;
@@ -75,7 +73,6 @@ void main()
     }
 }
 """
-
 
 
 class Canvas(app.Canvas):
@@ -293,6 +290,23 @@ class Canvas(app.Canvas):
 
         self.program['a_color'].set_data(v_color) 
 
+    def find_neighbors(self,i):
+        # hash the cell the particle is in
+        cellx, celly = self.position_to_cell_coord(self.v_position[i], self.particle_size)
+        cell_hash = self.hash_cell(cellx, celly)
+        neighbors = []
+        # look for the neighbors by using the hash code of the cell and the adjacent cells
+        for dx in [-1, 0, 1]:
+            for dy in [-1, 0, 1]:
+                neighbor_cell_hash = self.hash_cell(cellx + dx, celly + dy)
+                if neighbor_cell_hash in self.start_indices:
+                    start_index = self.start_indices[neighbor_cell_hash]
+                    while start_index < len(self.spatial_lookup) and self.spatial_lookup[start_index][0] == neighbor_cell_hash:
+                        neighbor_index = self.spatial_lookup[start_index][1]
+                        if neighbor_index != i:
+                            neighbors.append(neighbor_index)
+                        start_index += 1
+        return i, neighbors
 
     def on_mouse_press(self, event):
         x, y = event.pos
@@ -314,16 +328,10 @@ class Canvas(app.Canvas):
         self.update_spatial_lookup(self.v_position, self.particle_size)
         self.v_velocity[:, 1] -= GRAVITY * DELTATIME *MASS
 
-        # Prepare data for PySpark
-        particle_data = [
-            (i, self.v_position[i], self.spatial_lookup, self.start_indices, self.particle_size, RADIUSOFINFLUENCE * self.ps)
-            for i in range(len(self.v_position))
-        ]
-        rdd = spark.sparkContext.parallelize(particle_data)
+        #PARALELL so we can distribute the work
+        with ThreadPoolExecutor() as executor:
+            results = list(executor.map(self.find_neighbors, range(len(self.v_position))))
 
-        neighbors_rdd = rdd.map(find_neighbors)
-        results = neighbors_rdd.collect()
-        
         # Process the results
         for i, neighbors in results:
             pressure_force = self.calculate_pressure_force(i, neighbors)
@@ -343,27 +351,6 @@ class Canvas(app.Canvas):
 
 
         self.update()
-
-
-def find_neighbors(particle_data):
-    index, position, spatial_lookup, start_indices, particle_size, radius_of_influence = particle_data
-    # hash the cell the particle is in
-    cellx, celly = int(position[0] / particle_size), int(position[1] / particle_size)
-    cell_hash = cellx * 15823 + celly * 9737333  # Hash function
-    neighbors = []
-    # look for the neighbors by using the hash code of the cell and the adjacent cells
-    for dx in [-1, 0, 1]:
-        for dy in [-1, 0, 1]:
-            neighbor_cell_hash = (cellx + dx) * 15823 + (celly + dy) * 9737333
-            if neighbor_cell_hash in start_indices:
-                start_index = start_indices[neighbor_cell_hash]
-                while start_index < len(spatial_lookup) and spatial_lookup[start_index][0] == neighbor_cell_hash:
-                    neighbor_index = spatial_lookup[start_index][1]
-                    if neighbor_index != index:
-                        neighbors.append(neighbor_index)
-                    start_index += 1
-    return index, neighbors
-
 
 
 if __name__ == '__main__':
