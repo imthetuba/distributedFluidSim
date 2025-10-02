@@ -19,7 +19,6 @@ Spark is LAZY - Transformations are only computed after action has been called
 Persist (cache) - keep elements on cluster for faster access
 
 """
-
 spark = SparkSession.builder.appName("Spark example").getOrCreate()
 
 data = [("John", 150,'990811'),("Erik", 200,'981012'), ("Karl", 500, '000312') ]
@@ -28,5 +27,4 @@ df = spark.createDataFrame(data, ["Name", "Salary", "DOB"])
 df.show()
 
 spark.stop()
-
 
