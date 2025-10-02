@@ -6,24 +6,32 @@ from pyspark.sql import SparkSession
 import numpy as np
 import random
 from math import pi
-GRAVITY = 9.81
+
+GRAVITY = 900.81
 DELTATIME = 0.0002
-BOUNDSIZE = 1.5
+BOUNDSIZE = 0.8
 PARTICLESIZE = 0.05
-RADIUSOFINFLUENCE = 1.5
-RESTDENSITY = 12
+RADIUSOFINFLUENCE = 0.5
+RESTDENSITY = 20
 STIFFNESS = 0.8
 MASS = 1.0
 DAMPING = 0.96
 RESTITUTION = 0.95
-MAX_PRESSURE = 10.0
+MAX_PRESSURE = 100.0
 VISCOSITY_COEFFICIENT = 0.1
-NUM_PARTICLES = 100
+NUM_PARTICLES = 50
 PUSH_RADIUS = 0.5
 PUSH_STRENGTH = 50.0
 
 
-spark = SparkSession.builder.appName("ParticleSimulation").getOrCreate()
+spark = SparkSession.builder \
+    .appName("ParticleSimulation") \
+    .master("spark://130.229.145.165:7077") \
+    .config("spark.executor.memory", "2g") \
+    .config("spark.driver.memory", "1g") \
+    .config("spark.pyspark.python", "python") \
+    .config("spark.pyspark.driver.python", "python") \
+    .getOrCreate()
 
 VERT_SHADER = """
 attribute vec2  a_position;
@@ -135,28 +143,6 @@ class Canvas(app.Canvas):
 
     def on_resize(self, event):
         gloo.set_viewport(0, 0, *event.physical_size)
-
-
-
-    def resolve_collisions(self,i):
-        half_bound = (self.bound_size / 2.0 )
-        if self.v_position[i, 1] >= half_bound - self.particle_size / 2: 
-            # if above upper boundary
-            self.v_position[i, 1] = half_bound - self.particle_size / 2
-            self.v_velocity[i, 1] *= -RESTITUTION  
-        elif self.v_position[i, 1] <= -half_bound + self.particle_size / 2:     
-            # if below lower boundary
-            self.v_position[i, 1] = -half_bound + self.particle_size/ 2
-            self.v_velocity[i, 1] *= -RESTITUTION 
-
-        if self.v_position[i, 0] >= half_bound - self.particle_size / 2:
-            # if beyond right boundary
-            self.v_position[i, 0] = half_bound - self.particle_size / 2
-            self.v_velocity[i, 0] *= -RESTITUTION
-        elif self.v_position[i, 0] <= -half_bound + self.particle_size / 2:
-            # if beyond left boundary
-            self.v_position[i, 0] = -half_bound + self.particle_size / 2
-            self.v_velocity[i, 0] *= -RESTITUTION
            
 
     def smoothing_kernel(self, r, h):
@@ -297,6 +283,7 @@ class Canvas(app.Canvas):
     def on_mouse_press(self, event):
         x, y = event.pos
         canvas_width, canvas_height = self.size
+        
         world_x = (x / canvas_width - 0.5) * self.bound_size
         world_y = (0.5 - y / canvas_height) * self.bound_size
 
@@ -334,10 +321,19 @@ class Canvas(app.Canvas):
         self.v_velocity *= DAMPING
         self.v_position += self.v_velocity * DELTATIME
         
-        #PARALELL so we can distribute the work
-        with ThreadPoolExecutor() as executor:
-            list(executor.map(self.resolve_collisions, range(len(self.v_position))))
-
+        collision_data = [
+            (i, self.v_position[i], self.v_velocity[i], self.particle_size, self.bound_size)
+            for i in range(len(self.v_position))
+        ]
+        collision_rdd = spark.sparkContext.parallelize(collision_data)
+        collision_results_rdd = collision_rdd.map(resolve_collisions)
+        collision_results = collision_results_rdd.collect()
+        
+        # Update positions and velocities from collision resolution
+        for index, new_position, new_velocity in collision_results:
+            self.v_position[index] = new_position
+            self.v_velocity[index] = new_velocity
+        
         
         self.update_colors()
 
@@ -364,7 +360,32 @@ def find_neighbors(particle_data):
                     start_index += 1
     return index, neighbors
 
+def resolve_collisions(particle_data):
+    index, position, velocity, particle_size, bound_size = particle_data
+    half_bound = bound_size / 2.0
+    new_position = position.copy()
+    new_velocity = velocity.copy()
+    
+    if position[1] >= half_bound - particle_size / 2: 
+        # if above upper boundary
+        new_position[1] = half_bound - particle_size / 2
+        new_velocity[1] *= -RESTITUTION  
+    elif position[1] <= -half_bound + particle_size / 2:     
+        # if below lower boundary
+        new_position[1] = -half_bound + particle_size / 2
+        new_velocity[1] *= -RESTITUTION 
 
+    # Check horizontal boundaries
+    if position[0] >= half_bound - particle_size / 2:
+        # if beyond right boundary
+        new_position[0] = half_bound - particle_size / 2
+        new_velocity[0] *= -RESTITUTION
+    elif position[0] <= -half_bound + particle_size / 2:
+        # if beyond left boundary
+        new_position[0] = -half_bound + particle_size / 2
+        new_velocity[0] *= -RESTITUTION
+    
+    return index, new_position, new_velocity
 
 if __name__ == '__main__':
     canvas = Canvas()
