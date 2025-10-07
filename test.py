@@ -19,14 +19,14 @@ DAMPING = 0.96
 RESTITUTION = 0.95
 MAX_PRESSURE = 100.0
 VISCOSITY_COEFFICIENT = 0.1
-NUM_PARTICLES = 50
+NUM_PARTICLES = 100
 PUSH_RADIUS = 0.5
 PUSH_STRENGTH = 50.0
 
 
 spark = SparkSession.builder \
     .appName("ParticleSimulation") \
-    .master("spark://130.229.145.165:7077") \
+    .master("spark://130.229.164.179:7077") \
     .config("spark.executor.memory", "2g") \
     .config("spark.driver.memory", "1g") \
     .config("spark.pyspark.python", "python") \

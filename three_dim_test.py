@@ -4,23 +4,22 @@ from concurrent.futures import ThreadPoolExecutor
 import random
 from math import pi
 
-GRAVITY = 900.81
+GRAVITY = 9.81
 DELTATIME = 0.0002
 BOUNDSIZE = 0.7
 PARTICLESIZE = 0.05
-RADIUSOFINFLUENCE = 1.5
-RESTDENSITY = 12
+RADIUSOFINFLUENCE = 0.05
+RESTDENSITY = 2.0
 STIFFNESS = 0.8
-EXPLOSION_RADIUS = 0.5
-EXPLOSION_FORCE = 500.0
+EXPLOSION_RADIUS = 0.3
+EXPLOSION_FORCE = 5.0
 MASS = 1.0
 DAMPING = 0.95
 RESTITUTION = 0.95
-MAX_PRESSURE = 10.0
+MAX_PRESSURE = 100.0
 VISCOSITY_COEFFICIENT = 0.1
-NUM_PARTICLES = 100
-MIN_DISTANCE_PUSH= 100.0
-
+NUM_PARTICLES = 200
+MIN_DISTANCE_PUSH= 1.0
 
 class FluidSimulation3D:
     def __init__(self):
@@ -36,20 +35,15 @@ class FluidSimulation3D:
         self.spatial_lookup = [None] * self.n_particles
         self.start_indices = {}
 
-        # Explosion state
-        self.explosion_active = False
+        # Explosion state - simplified
         self.explosion_center = np.array([0.0, -BOUNDSIZE/2 + 0.2, 0.0])  # Bottom of cube
-        self.explosion_timer = 0.0
-        self.explosion_duration = 0.1  # Duration of explosion effect
         
-        
-        # Initialize particle positions randomly within bounds
-        half_bound = BOUNDSIZE / 2.0
+        cluster_size = 0.3  # Much smaller initial area
         for i in range(self.n_particles):
             self.v_position[i] = [
-                random.uniform(-half_bound, half_bound),
-                random.uniform(-half_bound, half_bound),
-                random.uniform(-half_bound, half_bound)
+                random.uniform(-cluster_size, cluster_size),
+                random.uniform(0.1, cluster_size + 0.1),  # Start slightly above center
+                random.uniform(-cluster_size, cluster_size)
             ]
         
         # Create particle sizes and initial colors
@@ -140,10 +134,10 @@ class FluidSimulation3D:
         return factor * (h**2 - r**2)**2 * r
 
     def viscosity_kernel(self, r, h):
-        if r > h:
+        if r > h or r<= 0:
             return 0.0
         factor = 45 / (pi * h**6)
-        return factor * (h - r)
+        return factor * (-r**3 / (2 * h**3) + r**2 / h**2 + h / (2 * r) - 1)
 
     def position_to_cell_coord(self, position, radius):
         cellx = int(position[0] / radius)
@@ -157,10 +151,10 @@ class FluidSimulation3D:
         c = cellz * 83492791
         return a + b + c
 
-    def update_spatial_lookup(self, points, radius):
+    def update_spatial_lookup(self, points, h):
         spatial_lookup = []
         for i, position in enumerate(points):
-            cellx, celly, cellz = self.position_to_cell_coord(position, radius)
+            cellx, celly, cellz = self.position_to_cell_coord(position, h)
             cell_hash = self.hash_cell(cellx, celly, cellz)
             spatial_lookup.append((cell_hash, i))
 
@@ -176,8 +170,8 @@ class FluidSimulation3D:
 
     def calculate_density(self, index):
         h = RADIUSOFINFLUENCE
-        density = 0
-        cellx, celly, cellz = self.position_to_cell_coord(self.v_position[index], PARTICLESIZE)
+        density = MASS
+        cellx, celly, cellz = self.position_to_cell_coord(self.v_position[index], h)
         
         for dx in [-1, 0, 1]:
             for dy in [-1, 0, 1]:
@@ -188,7 +182,7 @@ class FluidSimulation3D:
                         while start_index < len(self.spatial_lookup) and self.spatial_lookup[start_index][0] == neighbor_cell_hash:
                             neighbor_index = self.spatial_lookup[start_index][1]
                             if neighbor_index != index:
-                                direction = self.v_position[index] - self.v_position[neighbor_index]
+                                direction =  self.v_position[neighbor_index] - self.v_position[index]
                                 distance = np.linalg.norm(direction)
                                 if distance <= h:
                                     density += MASS * self.smoothing_kernel(distance, h)
@@ -202,7 +196,7 @@ class FluidSimulation3D:
         return np.clip(shared_pressure, -MAX_PRESSURE, MAX_PRESSURE)
 
     def find_neighbors(self, i):
-        cellx, celly, cellz = self.position_to_cell_coord(self.v_position[i], PARTICLESIZE)
+        cellx, celly, cellz = self.position_to_cell_coord(self.v_position[i], RADIUSOFINFLUENCE)
         neighbors = []
         
         for dx in [-1, 0, 1]:
@@ -217,37 +211,63 @@ class FluidSimulation3D:
                                 neighbors.append(neighbor_index)
                             start_index += 1
         return i, neighbors
-
-    def calculate_pressure_force(self, index, neighbors):
+    
+    def calculate_pressure_force_optimized(self, index, neighbors, densities):
         pressureforce = np.zeros(3, dtype=np.float32)
         min_distance = PARTICLESIZE * 0.5
         
         for neighbor_index in neighbors:
-            direction = self.v_position[index] - self.v_position[neighbor_index]
-            distance = np.linalg.norm(direction)
-            if distance <= RADIUSOFINFLUENCE and distance > min_distance:
-                slope = self.smoothing_kernel_gradient(distance, PARTICLESIZE)
-                density = self.calculate_density(neighbor_index)
-                density_of_index = self.calculate_density(index)
-                if density > 0:
-                    shared_pressure = self.calculate_shared_pressure(density_of_index, density)
-                    pressureforce += direction * slope * shared_pressure * MASS / density
-            elif distance <= min_distance:
-                #add a strong repulsive force to prevent overlap
-                pressureforce += direction * MIN_DISTANCE_PUSH  # Arbitrary strong force
+            if neighbor_index != index:
+                direction = self.v_position[index] - self.v_position[neighbor_index]
+                distance = np.linalg.norm(direction)
+
+                if distance < min_distance:
+                    distance = min_distance
+
+                if distance <= RADIUSOFINFLUENCE :
+                    slope = self.smoothing_kernel_gradient(distance, RADIUSOFINFLUENCE) 
+                    density = densities[neighbor_index]  
+                    density_of_index = densities[index]  
+                    if density > 0:
+                        shared_pressure = self.calculate_shared_pressure(density_of_index, density)
+                        pressureforce += direction * slope * shared_pressure * MASS / density
+                        
+
         return pressureforce
 
     def calculate_viscosity_force(self, index, neighbors):
-        min_distance = PARTICLESIZE * 0.5
         viscosity_force = np.zeros(3, dtype=np.float32)
+        min_distance = PARTICLESIZE * 0.1  # Add minimum distance
+       
         
         for neighbor in neighbors:
-            distance = np.linalg.norm(self.v_position[index] - self.v_position[neighbor])
-            if distance <= RADIUSOFINFLUENCE and distance > min_distance:
+            direction = self.v_position[index] - self.v_position[neighbor]
+            distance = np.linalg.norm(direction)
+            
+            # Prevent division by zero
+            if distance < min_distance:
+                distance = min_distance
+                
+            if distance <= RADIUSOFINFLUENCE:
                 influence = self.viscosity_kernel(distance, RADIUSOFINFLUENCE)
-                viscosity_force += (self.v_velocity[neighbor] - self.v_velocity[index]) * influence
+                velocity_diff = self.v_velocity[neighbor] - self.v_velocity[index]
+                
+                # Clamp influence to prevent overflow
+                influence = np.clip(influence, -1000.0, 1000.0)
+                
+                # Clamp velocity difference to prevent overflow
+                velocity_diff = np.clip(velocity_diff, -10.0, 10.0)
+                
+                # Check for NaN/inf values before adding
+                force_contribution = velocity_diff * influence
+                if not (np.any(np.isnan(force_contribution)) or np.any(np.isinf(force_contribution))):
+                    viscosity_force += force_contribution
         
+        # Clamp final viscosity force
+        viscosity_force = np.clip(viscosity_force, -100.0, 100.0)
         return viscosity_force * VISCOSITY_COEFFICIENT
+
+    
 
     def update_colors(self):
         """Update particle colors based on velocity"""
@@ -261,7 +281,7 @@ class FluidSimulation3D:
         self.particle_colors[:, 2] = 1 - normalized_speed  # Blue channel
 
     def apply_explosion_force(self):
-        """Apply spherical explosion force from the bottom of the cube"""
+        """Apply single instantaneous explosion force from the bottom of the cube"""
         for i in range(self.n_particles):
             # Calculate distance from explosion center
             direction = self.v_position[i] - self.explosion_center
@@ -275,27 +295,24 @@ class FluidSimulation3D:
                 # Calculate force magnitude (inverse square falloff)
                 force_magnitude = EXPLOSION_FORCE / (distance**2 + 0.1)  # +0.1 to avoid division by zero
                 
-                # Apply the explosion force
-                explosion_force = direction_normalized * force_magnitude
-                self.v_velocity[i] += explosion_force * DELTATIME
-
+                # Apply the explosion force directly to velocity (single push)
+                explosion_velocity = direction_normalized * force_magnitude
+                self.v_velocity[i] += explosion_velocity
 
     def on_key_press(self, event):
         """Handle keyboard input for camera controls"""
         if event.key == 'r':
             # Reset simulation
-            half_bound = BOUNDSIZE / 2.0
+            cluster_size = 0.15  # Much smaller initial area
             for i in range(self.n_particles):
                 self.v_position[i] = [
-                    random.uniform(-half_bound, half_bound),
-                    random.uniform(-half_bound, half_bound),
-                    random.uniform(-half_bound, half_bound)
+                    random.uniform(-cluster_size, cluster_size),
+                    random.uniform(0.1, cluster_size + 0.1),  # Start slightly above center
+                    random.uniform(-cluster_size, cluster_size)
                 ]
-            self.v_velocity.fill(0)
         elif event.key == ' ':  # Space bar for explosion
             print("BOOM! Explosion triggered!")
-            self.explosion_active = True
-            self.explosion_timer = 0.0
+            self.apply_explosion_force()  # Apply immediately, once
         elif event.key == 'p':  # Changed pause to 'p' key
             # Pause/unpause
             if self.timer.running:
@@ -308,33 +325,34 @@ class FluidSimulation3D:
     def on_timer(self, event):
         """Update simulation physics"""
         # Update spatial lookup
-        self.update_spatial_lookup(self.v_position, PARTICLESIZE)
+        self.update_spatial_lookup(self.v_position, RADIUSOFINFLUENCE)
         
-        # Apply gravity
-        self.v_velocity[:, 1] -= GRAVITY * DELTATIME * MASS
+        # Pre-calculate all densities
+        densities = np.zeros(self.n_particles)
+        with ThreadPoolExecutor() as executor:
+            densities = list(executor.map(self.calculate_density, range(self.n_particles)))
+
         
-        if self.explosion_active:
-            self.apply_explosion_force()
-            self.explosion_timer += DELTATIME
-            
-            # Deactivate explosion after duration
-            if self.explosion_timer >= self.explosion_duration:
-                self.explosion_active = False
-                print("Explosion finished")
-        
-        # Calculate forces using parallel processing
+        # Calculate forces using pre-calculated densities
         with ThreadPoolExecutor() as executor:
             results = list(executor.map(self.find_neighbors, range(self.n_particles)))
         
-        # Apply forces
         for i, neighbors in results:
-            pressure_force = self.calculate_pressure_force(i, neighbors)
-            viscosity_force = self.calculate_viscosity_force(i, neighbors)
-            total_force = pressure_force + viscosity_force
-            self.v_velocity[i] += total_force * DELTATIME / MASS
+            if len(neighbors) > 0: 
+                pressure_force = self.calculate_pressure_force_optimized(i, neighbors, densities)
+                viscosity_force = self.calculate_viscosity_force(i, neighbors)
+                total_force = pressure_force + viscosity_force
+                self.v_velocity[i] += total_force * DELTATIME / MASS
+        
+        # Clamp velocities to prevent runaway values
+        self.v_velocity = np.clip(self.v_velocity, -50.0, 50.0)
+        
         
         # Apply damping
         self.v_velocity *= DAMPING
+
+        # Apply gravity
+        self.v_velocity[:, 1] -= GRAVITY * DELTATIME * MASS
         
         # Update positions
         self.v_position += self.v_velocity * DELTATIME
@@ -349,6 +367,7 @@ class FluidSimulation3D:
             pos=self.v_position,
             face_color=self.particle_colors
         )
+
 
     def run(self):
         """Start the simulation"""
