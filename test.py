@@ -11,7 +11,7 @@ GRAVITY = 900.81
 DELTATIME = 0.0002
 BOUNDSIZE = 0.8
 PARTICLESIZE = 0.05
-RADIUSOFINFLUENCE = 0.5
+RADIUSOFINFLUENCE = 0.2
 RESTDENSITY = 20
 STIFFNESS = 0.8
 MASS = 1.0
@@ -19,14 +19,14 @@ DAMPING = 0.96
 RESTITUTION = 0.95
 MAX_PRESSURE = 100.0
 VISCOSITY_COEFFICIENT = 0.1
-NUM_PARTICLES = 100
+NUM_PARTICLES = 250
 PUSH_RADIUS = 0.5
 PUSH_STRENGTH = 50.0
 
 
 spark = SparkSession.builder \
     .appName("ParticleSimulation") \
-    .master("spark://130.229.164.179:7077") \
+    .master("spark://130.229.133.153:7077") \
     .config("spark.executor.memory", "2g") \
     .config("spark.driver.memory", "1g") \
     .config("spark.pyspark.python", "python") \

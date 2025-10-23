@@ -1,0 +1,35 @@
+# Distributed Fluid Simulation
+
+A fluid simulation project that implements Smoothed Particle Hydrodynamics (SPH) with distributed computing capabilities using Apache Spark.
+
+## Overview
+
+This project contains multiple implementations of a fluid simulation system:
+- **2D Fluid Simulation**: Traditional implementation with local parallel processing
+- **3D Fluid Simulation**: Extended version with 3D visualization using VisPy
+- **Distributed Implementation**: Spark-based distributed computing for large-scale simulations
+
+## Files Structure
+
+### Core Simulation Files
+- [`old_working_sim.py`](old_working_sim.py) - Working 2D fluid simulation with local threading
+- [`three_dim_test.py`](three_dim_test.py) - 3D fluid simulation with interactive controls
+- [`test.py`](test.py) - Distributed 2D simulation using PySpark
+
+### Spark Testing Files
+- [`sparktest.py`](sparktest.py) - Basic Spark DataFrame operations
+- [`sparktest2.py`](sparktest2.py) - Simple RDD operations test
+- [`sparktesttwonodes.py`](sparktesttwonodes.py) - Multi-node Spark cluster connectivity test
+
+### Physics Implementation
+- **Smoothed Particle Hydrodynamics (SPH)** for fluid dynamics
+- **Spatial hashing** for efficient neighbor finding
+- **Pressure forces** based on density calculations
+- **Viscosity forces** for realistic fluid behavior
+- **Collision detection** with boundary walls
+- **Gravity simulation**
+
+### Visualization
+- **Real-time rendering** using VisPy and OpenGL
+- **Color-coded particles** based on velocity
+- **Interactive controls** (mouse interactions, keyboard shortcuts)

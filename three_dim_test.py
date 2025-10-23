@@ -5,18 +5,18 @@ import random
 from math import pi
 
 GRAVITY = 9.81
-DELTATIME = 0.0002
+DELTATIME = 0.001
 BOUNDSIZE = 0.7
 PARTICLESIZE = 0.05
-RADIUSOFINFLUENCE = 0.05
+RADIUSOFINFLUENCE = 0.1
 RESTDENSITY = 2.0
-STIFFNESS = 0.8
+STIFFNESS = 0.01
 EXPLOSION_RADIUS = 0.3
 EXPLOSION_FORCE = 5.0
 MASS = 1.0
 DAMPING = 0.95
 RESTITUTION = 0.95
-MAX_PRESSURE = 100.0
+MAX_PRESSURE = 1000.0
 VISCOSITY_COEFFICIENT = 0.1
 NUM_PARTICLES = 200
 MIN_DISTANCE_PUSH= 1.0
@@ -173,6 +173,7 @@ class FluidSimulation3D:
         density = MASS
         cellx, celly, cellz = self.position_to_cell_coord(self.v_position[index], h)
         
+        neighbor_count = 0
         for dx in [-1, 0, 1]:
             for dy in [-1, 0, 1]:
                 for dz in [-1, 0, 1]:
@@ -186,7 +187,13 @@ class FluidSimulation3D:
                                 distance = np.linalg.norm(direction)
                                 if distance <= h:
                                     density += MASS * self.smoothing_kernel(distance, h)
+                                    neighbor_count += 1
                             start_index += 1
+        
+        # Debug: Print density info for first few particles
+        if index < 5:
+            print(f"Particle {index}: density={density:.4f}, neighbors_in_radius={neighbor_count}")
+            
         return density
 
     def calculate_shared_pressure(self, density_i, density_j):
@@ -216,23 +223,45 @@ class FluidSimulation3D:
         pressureforce = np.zeros(3, dtype=np.float32)
         min_distance = PARTICLESIZE * 0.5
         
+        # Debug: Print neighbor count for first few particles
+        if index < 5:
+            print(f"Particle {index}: {len(neighbors)} neighbors")
+        
+        force_count = 0
         for neighbor_index in neighbors:
             if neighbor_index != index:
                 direction = self.v_position[index] - self.v_position[neighbor_index]
                 distance = np.linalg.norm(direction)
 
-                if distance < min_distance:
-                    distance = min_distance
 
-                if distance <= RADIUSOFINFLUENCE :
+                if distance <= RADIUSOFINFLUENCE:
+                    if distance < min_distance:
+                        distance = min_distance
+                        direction = direction / np.linalg.norm(direction) * min_distance
+
                     slope = self.smoothing_kernel_gradient(distance, RADIUSOFINFLUENCE) 
                     density = densities[neighbor_index]  
-                    density_of_index = densities[index]  
+                    density_of_index = densities[index] 
+
                     if density > 0:
                         shared_pressure = self.calculate_shared_pressure(density_of_index, density)
-                        pressureforce += direction * slope * shared_pressure * MASS / density
+                                                # Normalize direction if needed
+                        if np.linalg.norm(direction) > 0:
+                            direction_normalized = direction / distance
+                        else:
+                            direction_normalized = np.array([1.0, 0.0, 0.0])  # Default direction
                         
-
+                        force_contribution = direction_normalized * slope * shared_pressure * MASS / density
+                        pressureforce += force_contribution
+                        force_count += 1
+                        
+                        # Debug: Print force details for first particle
+                        if index == 0 and force_count <= 3:
+                            print(f"  Neighbor {neighbor_index}: dist={distance:.4f}, pressure={shared_pressure:.4f}, force_mag={np.linalg.norm(force_contribution):.4f}")
+        
+        if index < 5:
+            print(f"  Total force magnitude: {np.linalg.norm(pressureforce):.4f}")
+                        
         return pressureforce
 
     def calculate_viscosity_force(self, index, neighbors):
@@ -241,7 +270,7 @@ class FluidSimulation3D:
        
         
         for neighbor in neighbors:
-            direction = self.v_position[index] - self.v_position[neighbor]
+            direction =   self.v_position[index] - self.v_position[neighbor]
             distance = np.linalg.norm(direction)
             
             # Prevent division by zero
@@ -284,7 +313,7 @@ class FluidSimulation3D:
         """Apply single instantaneous explosion force from the bottom of the cube"""
         for i in range(self.n_particles):
             # Calculate distance from explosion center
-            direction = self.v_position[i] - self.explosion_center
+            direction = self.explosion_center - self.v_position[i] 
             distance = np.linalg.norm(direction)
             
             # Only apply force if particle is within explosion radius
@@ -296,7 +325,7 @@ class FluidSimulation3D:
                 force_magnitude = EXPLOSION_FORCE / (distance**2 + 0.1)  # +0.1 to avoid division by zero
                 
                 # Apply the explosion force directly to velocity (single push)
-                explosion_velocity = direction_normalized * force_magnitude
+                explosion_velocity = -direction_normalized * force_magnitude
                 self.v_velocity[i] += explosion_velocity
 
     def on_key_press(self, event):
@@ -324,6 +353,19 @@ class FluidSimulation3D:
 
     def on_timer(self, event):
         """Update simulation physics"""
+        # Debug: Print frame info occasionally
+        if hasattr(self, 'frame_count'):
+            self.frame_count += 1
+        else:
+            self.frame_count = 0
+            
+        if self.frame_count % 100 == 0:  # Print every 100 frames
+            print(f"\n--- Frame {self.frame_count} ---")
+            print(f"RADIUSOFINFLUENCE: {RADIUSOFINFLUENCE}")
+            print(f"PARTICLESIZE: {PARTICLESIZE}")
+            print(f"STIFFNESS: {STIFFNESS}")
+            print(f"RESTDENSITY: {RESTDENSITY}")
+            
         # Update spatial lookup
         self.update_spatial_lookup(self.v_position, RADIUSOFINFLUENCE)
         
